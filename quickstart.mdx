@@ -1,80 +1,231 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick start
+description: Build and train your first agent with rLLM in minutes
 ---
 
-## Get started in three steps
+This guide walks you through building a math reasoning agent with tool usage capabilities, from dataset preparation through reinforcement learning training.
 
-Get your documentation site running locally and make your first customization.
+## What you'll build
 
-### Step 1: Set up your local environment
+In this tutorial, you'll create an agent that can:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+- Access a Python interpreter to solve mathematical problems
+- Perform step-by-step reasoning with tool calls
+- Learn and improve through reinforcement learning
+
+<Info>
+**Example setup**: We'll use Qwen3-4B as the base model, train on the DeepScaleR-Preview-Math dataset, and evaluate on AIME 2024 problems.
+</Info>
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+- rLLM installed with the verl backend (see [installation](/installation))
+- At least 1 GPU with 16GB+ memory for inference
+- 8+ GPUs for training (or adjust batch sizes for fewer GPUs)
+
+## Step 1: Prepare the dataset
+
+rLLM's `DatasetRegistry` provides centralized dataset management. Create a script to prepare the math datasets:
+
+```python title="examples/math_tool/prepare_math_data.py"
+from datasets import load_dataset
+from rllm.data.dataset import DatasetRegistry
+
+def prepare_math_data():
+    train_dataset = load_dataset("agentica-org/DeepScaleR-Preview-Dataset", split="train")
+    test_dataset = load_dataset("HuggingFaceH4/aime_2024", split="train")
+
+    def preprocess_fn(example, idx):
+        return {
+            "question": example["problem"],
+            "ground_truth": example["answer"],
+            "data_source": "math",
+        }
+
+    train_dataset = train_dataset.map(preprocess_fn, with_indices=True)
+    test_dataset = test_dataset.map(preprocess_fn, with_indices=True)
+
+    train_dataset = DatasetRegistry.register_dataset("deepscaler_math", train_dataset, "train")
+    test_dataset = DatasetRegistry.register_dataset("aime2024", test_dataset, "test")
+    return train_dataset, test_dataset
+
+if __name__ == "__main__":
+    train_dataset, test_dataset = prepare_math_data()
+    print(f"Training examples: {len(train_dataset)}")
+    print(f"Test examples: {len(test_dataset)}")
+```
+
+Run the preparation script:
+
+```bash
+cd examples/math_tool
+python prepare_math_data.py
+```
+
+This registers the datasets and stores them as parquet files for efficient loading during training and inference.
+
+## Step 2: Start the model server
+
+rLLM requires a model server for inference. Choose vLLM or SGLang:
+
+<Tabs>
+  <Tab title="vLLM">
+    ```bash
+    python -m vllm.entrypoints.openai.api_server \
+        --model Qwen/Qwen3-4B \
+        --host 0.0.0.0 \
+        --port 30000 \
+        --dtype bfloat16 \
+        --tensor-parallel-size 1
+    ```
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    For multi-GPU inference, increase `--tensor-parallel-size` (e.g., 4 for 4 GPUs).
+  </Tab>
+  
+  <Tab title="SGLang">
+    ```bash
+    python -m sglang_router.launch_server \
+        --model-path Qwen/Qwen3-4B \
+        --dp-size 1 \
+        --dtype bfloat16
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    For data-parallel processing on multiple GPUs, increase `--dp-size`.
+  </Tab>
+</Tabs>
 
-### Step 2: Deploy your changes
+The server provides an OpenAI-compatible API at `http://localhost:30000/v1`.
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Step 3: Run inference
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+Test your agent's math problem-solving capability before training:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+```python title="examples/math_tool/run_math_with_tool.py"
+from rllm.agents.tool_agent import ToolAgent
+from rllm.engine import AgentExecutionEngine
+from rllm.environments.tools import ToolEnvironment
+from rllm.data.dataset import DatasetRegistry
 
-### Step 3: Go live
+# Load test dataset
+test_dataset = DatasetRegistry.load_dataset("aime2024", split="test")
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+# Configure agent with Python tool access
+agent = ToolAgent(
+    model_name="Qwen/Qwen3-4B",
+    base_url="http://localhost:30000/v1",
+    tools=["python"],
+    max_steps=10
+)
+
+# Create tool execution environment
+env = ToolEnvironment(tools=["python"])
+
+# Initialize execution engine
+engine = AgentExecutionEngine(
+    agent=agent,
+    env=env,
+    n_parallel_agents=64  # Parallel agent-environment pairs
+)
+
+# Run inference on test set
+results = engine.execute_tasks(test_dataset)
+
+# Compute metrics
+pass_at_1 = sum(r["correct"] for r in results) / len(results)
+print(f"Pass@1 on AIME 2024: {pass_at_1:.2%}")
+```
+
+Run the inference script:
+
+```bash
+cd examples/math_tool
+python run_math_with_tool.py
+```
+
+The `AgentExecutionEngine` orchestrates parallel agent-environment interactions, processing all test problems and computing accuracy metrics.
+
+## Step 4: Train with reinforcement learning
+
+Improve your agent's performance through RL training with GRPO (Group Relative Policy Optimization):
+
+```python title="examples/math_tool/train_math_with_tool.py"
+from rllm.trainer import AgentTrainer
+
+# Initialize trainer with GRPO
+trainer = AgentTrainer(
+    agent=agent,
+    env=env,
+    train_dataset="deepscaler_math",
+    test_dataset="aime2024",
+    algorithm="grpo",
+    backend="verl",
+    # Training hyperparameters
+    num_iterations=100,
+    batch_size=512,
+    rollout_batch_size=64,
+    n_parallel_agents=64,
+    # GRPO-specific settings
+    gamma=1.0,  # Discount factor
+    group_size=8,  # Samples per problem for advantage estimation
+)
+
+# Launch training
+trainer.train()
+```
+
+Run the training script:
+
+```bash
+cd examples/math_tool
+bash train_math_with_tool.sh
+```
+
+<Steps>
+  <Step title="Rollout generation">
+    The `AgentExecutionEngine` generates trajectories by running agent-environment pairs in parallel on training data batches.
+  </Step>
+  
+  <Step title="Advantage calculation">
+    GRPO computes advantages by comparing each trajectory's reward to the group average, encouraging high-reward actions.
+  </Step>
+  
+  <Step title="Model update">
+    The training backend updates model parameters to increase the probability of successful actions using PPO-style optimization.
+  </Step>
+  
+  <Step title="Iteration">
+    The updated model generates new trajectories for the next batch, continuing the improvement cycle.
+  </Step>
+</Steps>
+
+## Key components
+
+| Component | Purpose | Example usage |
+|-----------|---------|---------------|
+| `ToolAgent` | Agent with tool capabilities | Reasoning + Python execution |
+| `ToolEnvironment` | Safe tool execution | Sandboxed Python interpreter |
+| `DatasetRegistry` | Dataset management | Load/register datasets |
+| `AgentExecutionEngine` | Parallel agent execution | Efficient batch inference |
+| `AgentTrainer` | RL training orchestration | GRPO/PPO-based training |
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core concepts" icon="book" href="/core-concepts/overview">
+    Learn about rLLM's architecture and key abstractions
+  </Card>
+  
+  <Card title="Building agents" icon="robot" href="/guides/building-agents">
+    Create custom agents for your domain
+  </Card>
+  
+  <Card title="Custom environments" icon="cube" href="/guides/custom-environments">
+    Design environments and reward functions
+  </Card>
+  
+  <Card title="More examples" icon="code" href="/examples/math-agent">
+    Explore additional examples and use cases
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

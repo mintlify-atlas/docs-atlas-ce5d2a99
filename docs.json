@@ -1,122 +1,166 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "rLLM",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#6366f1",
+    "light": "#818cf8",
+    "dark": "#4f46e5"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/rllm-org/rllm"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/rllm-org/rllm",
+      "x": "https://x.com/rllm_project",
+      "website": "https://rllm-project.com"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "core-concepts/overview",
+              "core-concepts/agents-environments",
+              "core-concepts/execution-engine",
+              "core-concepts/workflow-engine",
+              "core-concepts/training",
+              "core-concepts/rl-algorithms"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "SDK",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "sdk/overview",
+              "sdk/sessions",
+              "sdk/trajectories",
+              "sdk/integrations"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Training Backends",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "backends/verl",
+              "backends/tinker",
+              "backends/comparison"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-agents",
+              "guides/custom-environments",
+              "guides/reward-functions",
+              "guides/distributed-training",
+              "guides/lora-training",
+              "guides/vlm-training",
+              "guides/multi-agent"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Examples",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Getting Started",
             "pages": [
-              "api-reference/introduction"
+              "examples/math-agent",
+              "examples/frozen-lake"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "SDK Examples",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "examples/sdk-math",
+              "examples/sdk-solver-judge",
+              "examples/sdk-langgraph"
+            ]
+          },
+          {
+            "group": "Advanced Examples",
+            "pages": [
+              "examples/deep-scaler",
+              "examples/deep-coder",
+              "examples/deep-swe",
+              "examples/search-agent",
+              "examples/vlm-geo3k"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Projects",
+        "groups": [
+          {
+            "group": "Case Studies",
+            "pages": [
+              "projects/finqa",
+              "projects/community"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/agents",
+              "api/environments",
+              "api/workflows"
+            ]
+          },
+          {
+            "group": "Engines",
+            "pages": [
+              "api/execution-engine",
+              "api/workflow-engine",
+              "api/rollout-engine"
+            ]
+          },
+          {
+            "group": "Training",
+            "pages": [
+              "api/trainer",
+              "api/rewards"
+            ]
+          },
+          {
+            "group": "SDK",
+            "pages": [
+              "api/sdk-session",
+              "api/sdk-decorators",
+              "api/sdk-chat-clients"
+            ]
+          },
+          {
+            "group": "Tools & Utilities",
+            "pages": [
+              "api/tools",
+              "api/parsers",
+              "api/data"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

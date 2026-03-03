@@ -1,0 +1,485 @@
+---
+title: Implementing Reward Functions
+description: Create custom reward functions to evaluate agent performance
+---
+
+## Overview
+
+Reward functions are the core of reinforcement learning in rLLM. They evaluate agent actions and return rewards that guide training. This guide shows you how to implement custom reward functions following the `RewardFunction` protocol.
+
+## RewardFunction Protocol
+
+All reward functions must implement this signature:
+
+```python
+from rllm.rewards.reward_fn import RewardFunction
+from rllm.rewards.reward_types import RewardOutput
+
+def my_reward_fn(task_info: dict, action: str) -> RewardOutput:
+    """Calculate reward for an agent's action.
+    
+    Args:
+        task_info: Task dictionary with question, ground_truth, metadata
+        action: Agent's response/solution
+        
+    Returns:
+        RewardOutput: Reward value and metadata
+    """
+    # Implement evaluation logic
+    is_correct = evaluate(task_info, action)
+    reward = 1.0 if is_correct else 0.0
+    
+    return RewardOutput(
+        reward=reward,
+        is_correct=is_correct,
+        metadata={}
+    )
+```
+
+See `rllm/rewards/reward_fn.py:14`.
+
+## RewardOutput Structure
+
+The return value must be a `RewardOutput` dataclass:
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class RewardOutput:
+    reward: float                          # The computed reward value
+    metadata: dict = field(default_factory=dict)  # Additional info
+    is_correct: bool | None = None         # Whether answer is correct
+```
+
+From `rllm/rewards/reward_types.py:77`.
+
+## Built-in Reward Functions
+
+rLLM provides several pre-built reward functions:
+
+### Math Reward Function
+
+Evaluates mathematical answers using symbolic comparison:
+
+```python
+from rllm.rewards.reward_fn import math_reward_fn
+
+task = {
+    "question": "What is 2 + 2?",
+    "ground_truth": "4",
+    "data_source": "gsm8k"
+}
+
+action = "The answer is \\boxed{4}."
+
+result = math_reward_fn(task, action)
+print(result.reward)      # 1.0
+print(result.is_correct)  # True
+```
+
+From `rllm/rewards/reward_fn.py:47`.
+
+### Code Reward Function
+
+Executes code and validates against test cases:
+
+```python
+from rllm.rewards.reward_fn import code_reward_fn
+
+task = {
+    "question": "Write a function to add two numbers",
+    "test_cases": [...],
+    "data_source": "humaneval"
+}
+
+action = """def add(a, b):
+    return a + b"""
+
+result = code_reward_fn(task, action)
+```
+
+From `rllm/rewards/reward_fn.py:87`.
+
+### F1 Reward Function
+
+Computes F1 score for text-based answers:
+
+```python
+from rllm.rewards.reward_fn import f1_reward_fn
+
+task = {"ground_truth": "The capital of France is Paris"}
+action = "Paris is the capital of France"
+
+result = f1_reward_fn(task, action)
+print(result.reward)  # F1 score between 0.0 and 1.0
+```
+
+From `rllm/rewards/reward_fn.py:105`.
+
+## Creating Custom Reward Functions
+
+<Steps>
+  <Step title="Define the function signature">
+    Follow the `RewardFunction` protocol:
+    
+    ```python
+    from rllm.rewards.reward_types import RewardOutput
+    from rllm.agents.agent import Action
+    
+    def custom_reward_fn(task_info: dict, action: str) -> RewardOutput:
+        # Handle Action objects
+        if isinstance(action, Action):
+            action = action.action
+        
+        # Your logic here
+        pass
+    ```
+  </Step>
+  
+  <Step title="Extract required fields from task_info">
+    Access task data safely:
+    
+    ```python
+    def custom_reward_fn(task_info: dict, action: str) -> RewardOutput:
+        # Extract fields with defaults
+        question = task_info.get("question", "")
+        ground_truth = task_info.get("ground_truth", None)
+        data_source = task_info.get("data_source", "unknown")
+        
+        # Validate required fields
+        if ground_truth is None:
+            return RewardOutput(
+                reward=0.0,
+                is_correct=False,
+                metadata={"error": "No ground truth provided"}
+            )
+    ```
+  </Step>
+  
+  <Step title="Parse and validate the action">
+    Extract the answer from the model's response:
+    
+    ```python
+    import re
+    
+    def extract_answer(response: str) -> str | None:
+        # Extract from \\boxed{...}
+        match = re.search(r"\\boxed\{([^}]+)\}", response)
+        if match:
+            return match.group(1).strip()
+        
+        # Extract from <answer>...</answer>
+        match = re.search(r"<answer>(.*?)</answer>", response, re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        
+        return None
+    ```
+  </Step>
+  
+  <Step title="Implement evaluation logic">
+    Compare the extracted answer to ground truth:
+    
+    ```python
+    def custom_reward_fn(task_info: dict, action: str) -> RewardOutput:
+        if isinstance(action, Action):
+            action = action.action
+        
+        ground_truth = task_info.get("ground_truth")
+        if ground_truth is None:
+            return RewardOutput(reward=0.0, is_correct=False)
+        
+        # Parse action
+        predicted_answer = extract_answer(action)
+        if predicted_answer is None:
+            return RewardOutput(reward=0.0, is_correct=False)
+        
+        # Normalize and compare
+        is_correct = normalize(predicted_answer) == normalize(ground_truth)
+        
+        return RewardOutput(
+            reward=1.0 if is_correct else 0.0,
+            is_correct=is_correct,
+            metadata={"predicted": predicted_answer}
+        )
+    ```
+  </Step>
+  
+  <Step title="Return RewardOutput">
+    Always return a `RewardOutput` object:
+    
+    ```python
+    return RewardOutput(
+        reward=1.0,              # Float value
+        is_correct=True,         # Boolean flag
+        metadata={               # Additional info
+            "predicted": "...",
+            "explanation": "..."
+        }
+    )
+    ```
+  </Step>
+</Steps>
+
+## Complete Example: Math Reward Function
+
+Here's the implementation of the built-in math reward function:
+
+```python
+from rllm.rewards.reward_types import RewardConfig, RewardOutput
+from rllm.rewards.math_utils.utils import extract_answer, grade_answer_mathd, grade_answer_sympy
+from rllm.globals import THOUGHT_DELIMITER_END
+
+class RewardMathFn:
+    def __init__(self, config: RewardConfig):
+        self.config = config
+    
+    def __call__(self, task_info: dict, action: str) -> RewardOutput:
+        model_response = action
+        
+        # Handle empty response
+        if model_response is None or model_response == "":
+            return RewardOutput(
+                reward=self.config.format_error_reward,
+                is_correct=False
+            )
+        
+        # Extract solution (remove thinking portion)
+        if THOUGHT_DELIMITER_END in model_response:
+            model_solution = model_response.split(THOUGHT_DELIMITER_END)[1]
+        else:
+            if self.config.apply_format_reward:
+                return RewardOutput(
+                    reward=self.config.format_error_reward,
+                    is_correct=False
+                )
+            model_solution = model_response
+        
+        # Extract answer from \\boxed{...}
+        model_answer = extract_answer(model_solution)
+        if model_answer is None:
+            return RewardOutput(
+                reward=self.config.format_error_reward,
+                is_correct=False
+            )
+        
+        # Get ground truth(s)
+        ground_truths = task_info.get("ground_truth", None)
+        if ground_truths is None:
+            return RewardOutput(
+                reward=self.config.unk_error_reward,
+                is_correct=False
+            )
+        
+        # Convert single answer to list
+        if isinstance(ground_truths, str | float | int):
+            ground_truths = [ground_truths]
+        
+        # Process each ground truth
+        processed_ground_truths = []
+        for truth in ground_truths:
+            truth = str(truth)
+            if "\\boxed" in truth:
+                processed_truth = extract_answer(truth)
+                if processed_truth:
+                    processed_ground_truths.append(processed_truth)
+            else:
+                processed_ground_truths.append(truth)
+        
+        # Check against all possible correct answers
+        for ground_truth in processed_ground_truths:
+            is_correct = (
+                grade_answer_mathd(model_answer, ground_truth) or
+                grade_answer_sympy(model_answer, ground_truth)
+            )
+            if is_correct:
+                reward = self.config.correct_reward
+                # Add bonus for tool usage
+                if task_info.get("has_toolcall", False):
+                    reward += self.config.toolcall_bonus
+                return RewardOutput(reward=reward, is_correct=True)
+        
+        return RewardOutput(
+            reward=self.config.incorrect_reward,
+            is_correct=False
+        )
+
+# Convenience function
+def math_reward_fn(task_info: dict, action: str) -> RewardOutput:
+    reward_config = RewardConfig()
+    reward_fn = RewardMathFn(reward_config)
+    return reward_fn(task_info, action)
+```
+
+From `rllm/rewards/math_reward.py:18`.
+
+## Configuring Reward Behavior
+
+Use `RewardConfig` to customize reward values:
+
+```python
+from rllm.rewards.reward_types import RewardConfig
+
+config = RewardConfig(
+    correct_reward=1.0,           # Reward for correct answers
+    incorrect_reward=0.0,         # Reward for incorrect answers
+    format_error_reward=0.0,      # Reward for format errors
+    unk_error_reward=0.0,         # Reward for unknown errors
+    toolcall_bonus=0.5,           # Bonus for using tools
+    apply_format_reward=False     # Whether to penalize format errors
+)
+
+reward_fn = RewardMathFn(config)
+```
+
+From `rllm/rewards/reward_types.py:11`.
+
+## Using Reward Functions
+
+### With SingleTurnEnvironment
+
+```python
+from rllm.environments.base.single_turn_env import SingleTurnEnvironment
+from rllm.trainer.agent_trainer import AgentTrainer
+
+env_args = {"reward_fn": custom_reward_fn}
+
+trainer = AgentTrainer(
+    agent_class=MyAgent,
+    env_class=SingleTurnEnvironment,
+    env_args=env_args,
+    config=config,
+    train_dataset=train_dataset
+)
+```
+
+### With Workflows
+
+```python
+from rllm.workflows.workflow import Workflow
+
+class MyWorkflow(Workflow):
+    def __init__(self, rollout_engine, reward_function=None, **kwargs):
+        super().__init__(rollout_engine, **kwargs)
+        self.reward_fn = reward_function or custom_reward_fn
+    
+    async def run(self, task: dict, uid: str, **kwargs):
+        # Generate response
+        output = await self.rollout_engine.get_model_response(messages)
+        
+        # Compute reward
+        reward_result = self.reward_fn(task, output.content)
+        
+        # Use reward in trajectory
+        # ...
+```
+
+## Advanced Patterns
+
+### LLM-as-Judge Rewards
+
+Use another LLM to evaluate responses:
+
+```python
+async def llm_judge_reward_fn(task_info: dict, action: str) -> RewardOutput:
+    judge_prompt = f"""
+    Question: {task_info['question']}
+    Ground Truth: {task_info['ground_truth']}
+    Student Answer: {action}
+    
+    Is the student answer correct? Reply with YES or NO.
+    """
+    
+    # Call judge model
+    judge_response = await judge_llm.generate(judge_prompt)
+    is_correct = "YES" in judge_response.upper()
+    
+    return RewardOutput(
+        reward=1.0 if is_correct else 0.0,
+        is_correct=is_correct,
+        metadata={"judge_response": judge_response}
+    )
+```
+
+### Multi-Objective Rewards
+
+Combine multiple reward signals:
+
+```python
+def multi_objective_reward_fn(task_info: dict, action: str) -> RewardOutput:
+    # Correctness reward
+    correctness = evaluate_correctness(task_info, action)
+    
+    # Length penalty (encourage concise answers)
+    length_penalty = min(1.0, 100 / len(action))
+    
+    # Clarity reward (based on readability)
+    clarity = evaluate_clarity(action)
+    
+    # Combine rewards
+    reward = 0.7 * correctness + 0.2 * length_penalty + 0.1 * clarity
+    
+    return RewardOutput(
+        reward=reward,
+        is_correct=correctness > 0.5,
+        metadata={
+            "correctness": correctness,
+            "length_penalty": length_penalty,
+            "clarity": clarity
+        }
+    )
+```
+
+### Shaped Rewards
+
+Provide intermediate rewards for multi-step reasoning:
+
+```python
+def shaped_math_reward_fn(task_info: dict, action: str) -> RewardOutput:
+    # Base correctness
+    is_correct = check_final_answer(task_info, action)
+    base_reward = 1.0 if is_correct else 0.0
+    
+    # Intermediate step bonuses
+    has_clear_steps = check_step_structure(action)
+    uses_correct_formula = check_formula(task_info, action)
+    shows_work = check_working(action)
+    
+    # Shape reward
+    shaped_reward = base_reward
+    if not is_correct:
+        # Give partial credit for good reasoning
+        shaped_reward += 0.2 * has_clear_steps
+        shaped_reward += 0.2 * uses_correct_formula
+        shaped_reward += 0.1 * shows_work
+    
+    return RewardOutput(
+        reward=shaped_reward,
+        is_correct=is_correct,
+        metadata={"partial_credit": shaped_reward - base_reward}
+    )
+```
+
+<Warning>
+  Be careful with reward shaping! Overly complex reward functions can lead to unexpected behaviors. Start simple and add complexity only when needed.
+</Warning>
+
+## Best Practices
+
+1. **Handle edge cases**: Empty responses, malformed answers, missing ground truth
+2. **Normalize answers**: Case, whitespace, punctuation before comparison
+3. **Support multiple formats**: Allow flexibility in how answers are expressed
+4. **Return meaningful metadata**: Help debug and analyze model behavior
+5. **Make rewards deterministic**: Avoid randomness unless necessary
+6. **Test thoroughly**: Validate on known correct/incorrect examples
+
+<Note>
+  The `is_correct` field in `RewardOutput` is used for computing accuracy metrics during training. Make sure it accurately reflects task success.
+</Note>
+
+## Next Steps
+
+- [Build custom agents](/guides/building-agents) that work with your reward function
+- [Create custom environments](/guides/custom-environments) to structure interactions
+- [Setup distributed training](/guides/distributed-training) to scale your experiments

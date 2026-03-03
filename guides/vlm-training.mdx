@@ -1,0 +1,513 @@
+---
+title: Vision-Language Model Training
+description: Train VLMs with reinforcement learning on multimodal tasks
+---
+
+## Overview
+
+rLLM supports training Vision-Language Models (VLMs) on tasks that combine images and text. This guide shows you how to work with multimodal inputs, handle image preprocessing, and configure VLM training.
+
+## Supported Models
+
+rLLM works with any VLM that follows the HuggingFace API:
+
+- **LLaVA** variants (LLaVA-1.5, LLaVA-NeXT)
+- **Qwen-VL** series
+- **Phi-3-Vision**
+- **Other HuggingFace VLMs**
+
+The framework handles image encoding automatically via the model's processor.
+
+## Quick Start
+
+### Basic VLM Training Example
+
+Here's a complete example using Qwen-VL for geometry problems:
+
+```python
+import hydra
+from examples.geo3k.geo3k_workflow import Geo3KWorkflow
+from rllm.data.dataset import DatasetRegistry
+from rllm.rewards.reward_fn import math_reward_fn
+from rllm.trainer.agent_trainer import AgentTrainer
+
+@hydra.main(
+    config_path="pkg://rllm.trainer.config",
+    config_name="agent_ppo_trainer",
+    version_base=None
+)
+def main(config):
+    # Load multimodal dataset
+    train_dataset = DatasetRegistry.load_dataset("geo3k", "train")
+    test_dataset = DatasetRegistry.load_dataset("geo3k", "test")
+    
+    # Configure VLM
+    config.actor_rollout_ref.actor.model.path = "Qwen/Qwen2-VL-7B-Instruct"
+    config.data.return_multi_modal_inputs = True  # Enable image inputs
+    
+    # Create trainer with workflow
+    trainer = AgentTrainer(
+        workflow_class=Geo3KWorkflow,
+        workflow_args={
+            "reward_function": math_reward_fn,
+        },
+        config=config,
+        train_dataset=train_dataset,
+        val_dataset=test_dataset,
+    )
+    
+    trainer.train()
+
+if __name__ == "__main__":
+    main()
+```
+
+Adapted from `examples/geo3k/train_geo3k.py:9`.
+
+## Data Format
+
+### Dataset Structure
+
+VLM datasets must include image data:
+
+```python
+{
+    "question": "What is the area of triangle ABC?",
+    "image": <PIL.Image.Image>,  # or bytes or base64 string
+    "ground_truth": "24",
+    "data_source": "geo3k"
+}
+```
+
+### Supported Image Formats
+
+1. **PIL Image** (recommended):
+```python
+from PIL import Image
+
+task = {
+    "question": "...",
+    "image": Image.open("path/to/image.jpg")
+}
+```
+
+2. **Bytes**:
+```python
+task = {
+    "question": "...",
+    "image": {"bytes": open("path/to/image.jpg", "rb").read()}
+}
+```
+
+3. **Multiple images**:
+```python
+task = {
+    "question": "...",
+    "images": [Image.open("img1.jpg"), Image.open("img2.jpg")]
+}
+```
+
+## Workflow Implementation
+
+<Steps>
+  <Step title="Create VLM workflow">
+    Subclass `Workflow` to handle multimodal inputs:
+    
+    ```python
+    from rllm.workflows.workflow import Workflow, TerminationEvent, TerminationReason
+    from rllm.agents.agent import Episode, Trajectory, Step, Action
+    from PIL import Image
+    from io import BytesIO
+    
+    class Geo3KWorkflow(Workflow):
+        def __init__(self, rollout_engine, reward_function=None, **kwargs):
+            super().__init__(rollout_engine, **kwargs)
+            self.agent = SimpleAgent()
+            self.reward_fn = reward_function or math_reward_fn
+    ```
+  </Step>
+  
+  <Step title="Process images in run method">
+    Convert image data to PIL format:
+    
+    ```python
+    async def run(self, task: dict, uid: str, **kwargs) -> Episode:
+        self.reset(task, uid)
+        
+        # Extract question and image
+        question = task.get("question")
+        image = task.get("image", task.get("images", None))
+        
+        # Handle single image
+        if isinstance(image, list) and len(image) > 0:
+            image = image[0]
+        
+        # Convert bytes to PIL Image
+        if isinstance(image, dict) and "bytes" in image:
+            image = Image.open(BytesIO(image["bytes"]))
+        
+        assert isinstance(image, Image.Image) or image is None, \
+            f"Image must be PIL.Image.Image, got {type(image)}"
+    ```
+    
+    From `examples/geo3k/geo3k_workflow.py:22`.
+  </Step>
+  
+  <Step title="Create multimodal messages">
+    Format messages with images:
+    
+    ```python
+    # Standard format: content is text, images is list[PIL.Image]
+    if image is not None:
+        messages = [
+            {
+                "role": "user",
+                "content": question,
+                "images": [image]  # List of PIL Images
+            }
+        ]
+    else:
+        messages = [{"role": "user", "content": question}]
+    ```
+    
+    From `examples/geo3k/geo3k_workflow.py:34`.
+  </Step>
+  
+  <Step title="Generate response">
+    Call the VLM:
+    
+    ```python
+    output = await self.rollout_engine.get_model_response(
+        messages,
+        application_id=uid,
+        **kwargs
+    )
+    ```
+  </Step>
+  
+  <Step title="Compute reward and build trajectory">
+    Same as text-only tasks:
+    
+    ```python
+    action = Action(output.content)
+    reward_result = self.reward_fn(task, action)
+    
+    trajectory = self.agent.trajectory
+    trajectory.steps.append(
+        Step(
+            chat_completions=messages + [
+                {
+                    "role": "assistant",
+                    "content": output.content,
+                    "reasoning": output.reasoning
+                }
+            ],
+            thought=output.reasoning,
+            action=action,
+            reward=reward_result.reward,
+            model_output=output,
+        )
+    )
+    
+    self.commit(agent=self.agent, reset=True)
+    
+    if output.finish_reason == "length":
+        raise TerminationEvent(TerminationReason.MAX_RESPONSE_LENGTH_EXCEEDED)
+    
+    raise TerminationEvent(TerminationReason.ENV_DONE)
+    ```
+    
+    From `examples/geo3k/geo3k_workflow.py:40`.
+  </Step>
+</Steps>
+
+## Complete Workflow Example
+
+```python
+from io import BytesIO
+from PIL import Image
+from rllm.agents.agent import Action, Episode, Step, Trajectory
+from rllm.engine import ModelOutput, RolloutEngine
+from rllm.rewards.reward_fn import RewardFunction, math_reward_fn
+from rllm.workflows.simple_workflow import SimpleAgent
+from rllm.workflows.workflow import TerminationEvent, TerminationReason, Workflow
+
+class Geo3KWorkflow(Workflow):
+    def __init__(
+        self,
+        rollout_engine: RolloutEngine,
+        reward_function: RewardFunction = None,
+        **kwargs
+    ):
+        super().__init__(rollout_engine, **kwargs)
+        self.agent = SimpleAgent()
+        self.reward_fn = reward_function or math_reward_fn
+    
+    async def run(self, task: dict, uid: str, **kwargs) -> Episode:
+        self.reset(task, uid)
+        
+        # Extract question and image
+        question = task.get("question")
+        image = task.get("image", task.get("images", None))
+        
+        # Handle multiple images (use first one)
+        if isinstance(image, list) and len(image) > 0:
+            image = image[0]
+        
+        # Convert bytes to PIL Image
+        if isinstance(image, dict) and "bytes" in image:
+            image = Image.open(BytesIO(image["bytes"]))
+        
+        assert isinstance(image, Image.Image) or image is None, \
+            f"Image must be PIL.Image.Image, got {type(image)}"
+        
+        # Create multimodal message
+        if image is not None:
+            messages = [
+                {
+                    "role": "user",
+                    "content": question,
+                    "images": [image]
+                }
+            ]
+        else:
+            messages = [{"role": "user", "content": question}]
+        
+        # Generate response
+        output: ModelOutput = await self.rollout_engine.get_model_response(
+            messages,
+            application_id=uid,
+            **kwargs
+        )
+        
+        # Evaluate response
+        action = Action(output.content)
+        reward_result = self.reward_fn(task, action)
+        
+        # Build trajectory
+        trajectory: Trajectory = self.agent.trajectory
+        trajectory.steps.append(
+            Step(
+                chat_completions=messages + [
+                    {
+                        "role": "assistant",
+                        "content": output.content,
+                        "reasoning": output.reasoning
+                    }
+                ],
+                thought=output.reasoning,
+                action=action,
+                reward=reward_result.reward,
+                model_output=output,
+            )
+        )
+        
+        self.commit(agent=self.agent, reset=True)
+        
+        # Handle termination
+        if output.finish_reason == "length":
+            raise TerminationEvent(TerminationReason.MAX_RESPONSE_LENGTH_EXCEEDED)
+        
+        raise TerminationEvent(TerminationReason.ENV_DONE)
+```
+
+From `examples/geo3k/geo3k_workflow.py:12`.
+
+## Configuration
+
+### Enable Multimodal Inputs
+
+```python
+config.data.return_multi_modal_inputs = True
+```
+
+This tells the data pipeline to preserve image data instead of text-only preprocessing.
+
+### VLM Model Selection
+
+```python
+config.actor_rollout_ref.actor.model.path = "Qwen/Qwen2-VL-7B-Instruct"
+```
+
+Supported models:
+- `Qwen/Qwen2-VL-7B-Instruct`
+- `Qwen/Qwen2-VL-72B-Instruct`
+- `llava-hf/llava-1.5-7b-hf`
+- `llava-hf/llava-v1.6-mistral-7b-hf`
+- `microsoft/Phi-3-vision-128k-instruct`
+
+### Memory Optimization
+
+VLMs require more memory due to image encoders:
+
+```yaml
+actor_rollout_ref:
+  actor:
+    model:
+      path: Qwen/Qwen2-VL-7B-Instruct
+      enable_gradient_checkpointing: true
+    ppo_micro_batch_size: 32  # Reduce batch size
+  rollout:
+    tensor_model_parallel_size: 2  # Split across GPUs
+
+data:
+  return_multi_modal_inputs: true
+```
+
+## Image Preprocessing
+
+### Automatic Preprocessing
+
+The VLM's processor handles image preprocessing automatically:
+
+```python
+# No need for manual preprocessing!
+messages = [{"role": "user", "content": "...", "images": [pil_image]}]
+output = await rollout_engine.get_model_response(messages)
+```
+
+The framework automatically:
+1. Resizes images to model's expected size
+2. Normalizes pixel values
+3. Converts to tensors
+4. Moves to correct device
+
+### Custom Preprocessing
+
+If you need custom preprocessing, do it before creating messages:
+
+```python
+from PIL import Image
+
+def preprocess_image(image: Image.Image) -> Image.Image:
+    # Custom preprocessing
+    image = image.convert("RGB")
+    image = image.resize((336, 336))
+    return image
+
+image = preprocess_image(raw_image)
+messages = [{"role": "user", "content": "...", "images": [image]}]
+```
+
+## Data Loading
+
+### Loading Geo3K Dataset
+
+```python
+from datasets import load_dataset
+from rllm.data.dataset import DatasetRegistry
+from PIL import Image
+import io
+import base64
+
+def preprocess_geo3k(example, idx):
+    # Decode base64 image
+    image_bytes = base64.b64decode(example["image"])
+    image = Image.open(io.BytesIO(image_bytes))
+    
+    return {
+        "question": example["problem_text"],
+        "image": image,
+        "ground_truth": example["answer"],
+        "data_source": "geo3k"
+    }
+
+# Load and preprocess
+geo3k = load_dataset("geo3k/geo3k")
+train_dataset = geo3k["train"].map(preprocess_geo3k, with_indices=True)
+
+# Register
+train_dataset = DatasetRegistry.register_dataset(
+    "geo3k",
+    train_dataset,
+    "train"
+)
+```
+
+## VLM + LoRA
+
+Combine VLM training with LoRA for efficiency:
+
+```python
+@hydra.main(
+    config_path="pkg://rllm.trainer.config",
+    config_name="agent_ppo_trainer"
+)
+def main(config):
+    # Configure VLM
+    config.actor_rollout_ref.actor.model.path = "Qwen/Qwen2-VL-7B-Instruct"
+    config.data.return_multi_modal_inputs = True
+    
+    # Enable LoRA
+    config.actor_rollout_ref.actor.model.enable_lora = True
+    config.actor_rollout_ref.actor.model.lora_rank = 16
+    config.actor_rollout_ref.actor.model.lora_alpha = 32
+    config.actor_rollout_ref.actor.model.lora_target_modules = [
+        "q_proj", "k_proj", "v_proj", "o_proj"  # Attention layers
+    ]
+    
+    trainer = AgentTrainer(
+        workflow_class=Geo3KWorkflow,
+        workflow_args={"reward_function": math_reward_fn},
+        config=config,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+    )
+    trainer.train()
+```
+
+<Note>
+  LoRA works particularly well with VLMs since you can freeze the vision encoder and only train language model layers.
+</Note>
+
+## Best Practices
+
+1. **Use PIL Images**: Convert all image formats to `PIL.Image.Image` early
+2. **Handle missing images**: Always check if `image is None`
+3. **Support multiple images**: Use `images` field for multi-image tasks
+4. **Reduce batch size**: VLMs need more memory than text-only models
+5. **Enable gradient checkpointing**: Saves memory at small speed cost
+6. **Use LoRA**: Dramatically reduces memory for VLM fine-tuning
+7. **Test on small dataset first**: Debug image pipeline before scaling
+
+## Common Issues
+
+### Images Not Loading
+
+1. Verify `return_multi_modal_inputs=True` in config
+2. Check image format (should be PIL.Image.Image)
+3. Ensure dataset has `"image"` or `"images"` field
+4. Test image decoding separately
+
+### Out of Memory
+
+1. Reduce `ppo_micro_batch_size` (e.g., from 64 to 16)
+2. Enable gradient checkpointing
+3. Use LoRA instead of full fine-tuning
+4. Enable tensor parallelism: `tensor_model_parallel_size=2`
+5. Reduce image resolution (if using custom preprocessing)
+
+### Model Not Using Images
+
+1. Check messages format: `{"role": "user", "content": "...", "images": [...]}`
+2. Verify model supports vision (check model card)
+3. Test with text-only input to isolate issue
+4. Enable debug logging to see processor inputs
+
+### Slow Training
+
+1. Use LoRA to reduce trainable parameters
+2. Enable async rollouts: `actor_rollout_ref.rollout.mode=async`
+3. Increase `n_parallel_tasks` for better GPU utilization
+4. Use smaller images (if task allows)
+5. Profile to identify bottleneck (vision encoder vs language model)
+
+<Warning>
+  VLM training requires significantly more GPU memory than text-only models. Plan for 1.5-2x the memory of equivalent text-only models.
+</Warning>
+
+## Next Steps
+
+- [LoRA training](/guides/lora-training) for parameter-efficient VLM fine-tuning
+- [Distributed training](/guides/distributed-training) to scale VLM training
+- [Multi-agent workflows](/guides/multi-agent) for complex multimodal scenarios

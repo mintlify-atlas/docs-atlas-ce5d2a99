@@ -1,0 +1,295 @@
+---
+title: Building Custom Agents
+description: Learn how to create custom agents by subclassing BaseAgent
+---
+
+## Overview
+
+Agents in rLLM are responsible for maintaining conversation state, parsing model responses, and building trajectories during training. This guide shows you how to build custom agents by subclassing `BaseAgent`.
+
+## Agent Interface
+
+All agents must inherit from `BaseAgent` and implement three core methods:
+
+```python
+from rllm.agents.agent import BaseAgent, Action, Step, Trajectory
+
+class MyCustomAgent(BaseAgent):
+    def update_from_env(self, observation, reward, done, info, **kwargs):
+        """Process environment feedback and update internal state."""
+        pass
+    
+    def update_from_model(self, response: str, **kwargs) -> Action:
+        """Process model response and return action."""
+        pass
+    
+    def reset(self) -> None:
+        """Reset agent state for new episode."""
+        pass
+    
+    @property
+    def chat_completions(self) -> list[dict[str, str]]:
+        """Return conversation history for model interaction."""
+        return self.messages
+    
+    @property
+    def trajectory(self) -> Trajectory:
+        """Return complete interaction trajectory."""
+        return self._trajectory
+```
+
+See the full interface in `rllm/agents/agent.py:254`.
+
+## Step-by-Step Guide
+
+<Steps>
+  <Step title="Initialize agent state">
+    Create instance variables to track conversation history and trajectory:
+    
+    ```python
+    class MathAgent(BaseAgent):
+        def __init__(self, accumulate_thinking=True):
+            self._trajectory = Trajectory()
+            self.messages = []
+            self.accumulate_thinking = accumulate_thinking
+    ```
+    
+    From `rllm/agents/math_agent.py:12`
+  </Step>
+  
+  <Step title="Implement update_from_env">
+    Handle environment observations and rewards:
+    
+    ```python
+    def update_from_env(self, observation, reward, done, info, **kwargs):
+        # Update existing step with reward
+        if observation is None or observation == {}:
+            if self.trajectory.steps:
+                cur_step = self.get_current_state()
+                cur_step.reward = reward
+                cur_step.done = done
+                cur_step.info = info
+            return
+        
+        # Create new step for new observation
+        formatted_obs = observation["question"] if isinstance(observation, dict) else observation
+        self.messages.append({"role": "user", "content": formatted_obs})
+        
+        new_step = Step(observation=formatted_obs)
+        self._trajectory.steps.append(new_step)
+    ```
+    
+    From `rllm/agents/math_agent.py:20`
+  </Step>
+  
+  <Step title="Implement update_from_model">
+    Parse model responses and extract actions:
+    
+    ```python
+    def update_from_model(self, response: str, **kwargs) -> Action:
+        self.messages.append({"role": "assistant", "content": response})
+        
+        cur_step = self.get_current_state()
+        cur_step.chat_completions = self.chat_completions
+        cur_step.model_response = response
+        
+        # Parse thinking and action
+        if response.count("</think>") == 1:
+            thought, sep, action = response.partition("</think>")
+            thought = thought + sep
+            action = Action(action.strip())
+        else:
+            thought = None
+            action = Action(response.strip())
+        
+        cur_step.thought = thought
+        cur_step.action = action
+        
+        return action
+    ```
+    
+    From `rllm/agents/math_agent.py:48`
+  </Step>
+  
+  <Step title="Implement reset method">
+    Clear state for new episodes:
+    
+    ```python
+    def reset(self) -> None:
+        """Reset agent state for new episode."""
+        self._trajectory = Trajectory()
+        self.messages = []
+    ```
+    
+    From `rllm/agents/math_agent.py:72`
+  </Step>
+  
+  <Step title="Implement properties">
+    Return conversation history and trajectory:
+    
+    ```python
+    @property
+    def chat_completions(self) -> list[dict[str, str]]:
+        messages = copy.deepcopy(self.messages)
+        if not self.accumulate_thinking:
+            for msg in messages[:-1]:
+                if msg["role"] == "assistant":
+                    _, sep, after = msg["content"].partition("</think>")
+                    if sep:
+                        msg["content"] = after
+        return messages
+    
+    @property
+    def trajectory(self) -> Trajectory:
+        return self._trajectory
+    ```
+    
+    From `rllm/agents/math_agent.py:77`
+  </Step>
+</Steps>
+
+## Complete Example: FrozenLake Agent
+
+Here's a more complex agent with custom parsing logic:
+
+```python
+from rllm.agents.agent import BaseAgent, Action, Step, Trajectory
+import re
+
+class FrozenLakeAgent(BaseAgent):
+    SYSTEM_PROMPT = """You are walking on a frozen lake.
+    Goal: Reach the goal (G). Player (P) and Goal (G) must overlap.
+    Valid Actions: Up | Down | Left | Right"""
+    
+    def __init__(self, max_steps=None, use_accumulate_thinking=True):
+        self._trajectory = Trajectory()
+        self.messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+        self.step = 0
+        self.accumulate_thinking = use_accumulate_thinking
+        self.max_steps = max_steps
+        self.current_observation = None
+    
+    def update_from_env(self, observation, reward, done, info, **kwargs):
+        if self._trajectory.steps:
+            cur_step = self._trajectory.steps[-1]
+            cur_step.reward = reward
+            cur_step.done = done
+            cur_step.info = info
+        
+        current_obs_str = str(observation)
+        user_prompt = f"Current Observation ({self.step}): \n{current_obs_str}\n"
+        user_prompt += "You have not achieved the goal, P has not reached G yet."
+        
+        self.messages.append({"role": "user", "content": user_prompt})
+        self.current_observation = current_obs_str
+    
+    def update_from_model(self, response: str, **kwargs) -> Action:
+        thought, action_str = self._parse_model_response(response)
+        self.messages.append({"role": "assistant", "content": response})
+        
+        new_step = Step(
+            chat_completions=copy.deepcopy(self.chat_completions),
+            thought=thought,
+            action=action_str,
+            model_response=response,
+            observation=self.current_observation
+        )
+        self._trajectory.steps.append(new_step)
+        self.step += 1
+        
+        return Action(action=action_str)
+    
+    def _parse_model_response(self, response: str) -> tuple[str, str]:
+        DIRECTION_MAP = {"left": 1, "down": 2, "right": 3, "up": 4}
+        
+        thought = response
+        action_str = "0"  # invalid action
+        
+        # Extract action from ```...``` blocks
+        matches = re.findall(r"```(.*?)```", response, re.DOTALL)
+        if matches:
+            last_match = matches[-1].strip()
+            last_match_index = response.rfind(f"```{last_match}```")
+            if last_match_index != -1:
+                thought = response[:last_match_index].strip()
+            
+            extracted_text = last_match.lower()
+            if extracted_text in DIRECTION_MAP:
+                action_str = str(DIRECTION_MAP[extracted_text])
+        
+        return thought, action_str
+    
+    def reset(self) -> None:
+        self._trajectory = Trajectory()
+        self.messages = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+        self.step = 0
+    
+    @property
+    def chat_completions(self) -> list[dict[str, str]]:
+        return self.messages
+    
+    @property
+    def trajectory(self) -> Trajectory:
+        return self._trajectory
+```
+
+From `rllm/agents/frozenlake_agent.py:13`.
+
+## Using Your Agent
+
+Once defined, use your agent with the training framework:
+
+```python
+from rllm.trainer.agent_trainer import AgentTrainer
+from rllm.data.dataset import DatasetRegistry
+
+train_dataset = DatasetRegistry.load_dataset("my_dataset", "train")
+
+trainer = AgentTrainer(
+    agent_class=MyCustomAgent,
+    agent_args={"accumulate_thinking": True},
+    env_class=MyEnvironment,
+    env_args={},
+    config=config,
+    train_dataset=train_dataset
+)
+trainer.train()
+```
+
+## Key Concepts
+
+### Trajectory Building
+
+The `Trajectory` object contains a list of `Step` objects, where each step records:
+- `observation`: Environment state
+- `thought`: Model reasoning (optional)
+- `action`: Parsed action
+- `reward`: Step reward
+- `model_response`: Raw model output
+- `chat_completions`: Conversation history at this step
+
+### Action Parsing
+
+Your `update_from_model` method should parse the model's free-form response into a structured `Action` object. Common patterns:
+- Extract text within XML tags: `<answer>...</answer>`
+- Parse code blocks: ` ```python ... ``` `
+- Use regex to find specific patterns
+- Map text to discrete action spaces
+
+<Warning>
+  Always handle parsing errors gracefully. Return a default/invalid action rather than raising exceptions, as this allows the training loop to continue.
+</Warning>
+
+## Best Practices
+
+1. **Keep state minimal**: Only track what's necessary for the task
+2. **Make reset complete**: Ensure `reset()` clears all episode-specific state
+3. **Validate inputs**: Check observation/response types before processing
+4. **Support flexibility**: Add configuration options for prompting strategies
+5. **Document behavior**: Clear docstrings for custom parsing logic
+
+## Next Steps
+
+- [Create custom environments](/guides/custom-environments) to interact with your agent
+- [Implement reward functions](/guides/reward-functions) to evaluate agent performance
+- See pre-built agents in `rllm/agents/` for more examples
