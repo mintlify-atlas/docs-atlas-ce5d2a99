@@ -1,0 +1,192 @@
+{
+  "projectType": "framework",
+  "projectName": "rLLM",
+  "projectDescription": "An open-source framework for post-training language agents via reinforcement learning",
+  "theme": "aspen",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4f46e5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "core-concepts/overview",
+              "core-concepts/agents-environments",
+              "core-concepts/execution-engine",
+              "core-concepts/workflow-engine",
+              "core-concepts/training",
+              "core-concepts/rl-algorithms"
+            ]
+          },
+          {
+            "group": "SDK",
+            "pages": [
+              "sdk/overview",
+              "sdk/sessions",
+              "sdk/trajectories",
+              "sdk/integrations"
+            ]
+          },
+          {
+            "group": "Training Backends",
+            "pages": [
+              "backends/verl",
+              "backends/tinker",
+              "backends/comparison"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/building-agents",
+              "guides/custom-environments",
+              "guides/reward-functions",
+              "guides/distributed-training",
+              "guides/lora-training",
+              "guides/vlm-training",
+              "guides/multi-agent"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "examples/math-agent",
+              "examples/frozen-lake"
+            ]
+          },
+          {
+            "group": "SDK Examples",
+            "pages": [
+              "examples/sdk-math",
+              "examples/sdk-solver-judge",
+              "examples/sdk-langgraph"
+            ]
+          },
+          {
+            "group": "Advanced Examples",
+            "pages": [
+              "examples/deep-scaler",
+              "examples/deep-coder",
+              "examples/deep-swe",
+              "examples/search-agent",
+              "examples/vlm-geo3k"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Projects",
+        "groups": [
+          {
+            "group": "Case Studies",
+            "pages": [
+              "projects/finqa",
+              "projects/community"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/agents",
+              "api/environments",
+              "api/workflows"
+            ]
+          },
+          {
+            "group": "Engines",
+            "pages": [
+              "api/execution-engine",
+              "api/workflow-engine",
+              "api/rollout-engine"
+            ]
+          },
+          {
+            "group": "Training",
+            "pages": [
+              "api/trainer",
+              "api/rewards"
+            ]
+          },
+          {
+            "group": "SDK",
+            "pages": [
+              "api/sdk-session",
+              "api/sdk-decorators",
+              "api/sdk-chat-clients"
+            ]
+          },
+          {
+            "group": "Tools & Utilities",
+            "pages": [
+              "api/tools",
+              "api/parsers",
+              "api/data"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Define custom agents and environments with simple abstractions",
+    "Unified interface for agent inference and training",
+    "Asynchronous parallelized trajectory generation",
+    "Scalable RL training with PPO, GRPO, and other algorithms",
+    "Multiple training backends (verl, tinker)",
+    "SDK for integrating LangGraph, SmolAgent, Strands workflows",
+    "Support for LoRA fine-tuning and VLM training",
+    "Multi-agent training workflows",
+    "Built-in reward functions for code, math, and search tasks",
+    "Distributed training support with Ray"
+  ],
+  "publicApiSurface": [
+    "BaseAgent",
+    "Action",
+    "Step",
+    "Trajectory",
+    "Episode",
+    "BaseEnv",
+    "SingleTurnEnvironment",
+    "MultiTurnEnvironment",
+    "AgentExecutionEngine",
+    "AgentWorkflowEngine",
+    "AgentSDKEngine",
+    "Workflow",
+    "SimpleWorkflow",
+    "MultiTurnWorkflow",
+    "EvalProtocolWorkflow",
+    "AgentTrainer",
+    "AgentPPOTrainer",
+    "AgentWorkflowTrainer",
+    "session",
+    "trajectory",
+    "get_chat_client",
+    "get_chat_client_async",
+    "RewardFunction",
+    "CodeReward",
+    "MathReward",
+    "SearchReward"
+  ]
+}
